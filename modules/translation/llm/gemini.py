@@ -15,9 +15,10 @@ class GeminiTranslation(BaseLLMTranslation):
         self.model_name = None
         self.api_key = None
         self.api_base_url = "https://generativelanguage.googleapis.com/v1beta/models"
-        # Retry configuration for rate limiting
-        self.max_retries = 5
-        self.base_delay = 1.0  # Base delay in seconds for exponential backoff
+        # Retry configuration for rate limiting - increased for better reliability
+        self.max_retries = 8
+        self.base_delay = 15.0  # Base delay in seconds for exponential backoff
+        self.max_delay = 120.0  # Maximum delay between retries
     
     def initialize(self, settings: Any, source_lang: str, target_lang: str, model_name: str, **kwargs) -> None:
         """
@@ -123,19 +124,19 @@ class GeminiTranslation(BaseLLMTranslation):
                 url, 
                 headers=headers, 
                 json=payload,
-                timeout=120
+                timeout=180  # Increased timeout for reliability
             )
             
             if response.status_code == 200:
                 return self._parse_response(response.json())
             elif response.status_code == 429:
                 # Rate limited - apply exponential backoff
-                delay = self.base_delay * (2 ** attempt)
+                delay = min(self.base_delay * (2 ** attempt), self.max_delay)
                 print(f"Rate limited (429). Retrying in {delay:.1f}s (attempt {attempt + 1}/{self.max_retries})")
                 time.sleep(delay)
             elif response.status_code >= 500:
                 # Server error - retry with backoff
-                delay = self.base_delay * (2 ** attempt)
+                delay = min(self.base_delay * (2 ** attempt), self.max_delay)
                 print(f"Server error ({response.status_code}). Retrying in {delay:.1f}s (attempt {attempt + 1}/{self.max_retries})")
                 time.sleep(delay)
             else:
