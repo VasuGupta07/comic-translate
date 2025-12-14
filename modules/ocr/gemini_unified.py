@@ -25,12 +25,17 @@ class GeminiUnifiedProcessor(OCREngine):
     - More cost-effective (~$0.003/page vs ~$0.03/page)
     """
     
+    # Class constants for configuration
+    DEFAULT_MAX_OUTPUT_TOKENS = 8000
+    MAX_BATCH_OUTPUT_TOKENS = 16000  # Cap for batched requests to avoid API rejections
+    REQUEST_TIMEOUT = 180  # Timeout for API requests in seconds
+    
     def __init__(self):
         self.api_key = None
         self.expansion_percentage = 5
         self.model = ''
         self.api_base_url = "https://generativelanguage.googleapis.com/v1beta/models"
-        self.max_output_tokens = 8000
+        self.max_output_tokens = self.DEFAULT_MAX_OUTPUT_TOKENS
         self.source_lang = 'Japanese'
         self.target_lang = 'English'
         # Retry configuration for rate limiting - increased for better reliability
@@ -55,7 +60,7 @@ class GeminiUnifiedProcessor(OCREngine):
         self.expansion_percentage = expansion_percentage
         credentials = settings.get_credentials(settings.ui.tr('Google Gemini'))
         self.api_key = credentials.get('api_key', '')
-        self.model = MODEL_MAP.get(model)
+        self.model = MODEL_MAP.get(model, 'gemini-2.5-pro')  # Default to gemini-2.5-pro if not found
         self.source_lang = source_lang
         self.target_lang = target_lang
         
@@ -380,8 +385,10 @@ Respond with ONLY a JSON object in this exact format:
         
         parts.append({"text": prompt})
         
+        # Calculate output tokens with a cap to avoid API rejections
+        batch_tokens = min(self.max_output_tokens * len(image_data), self.MAX_BATCH_OUTPUT_TOKENS)
         generation_config = {
-            "maxOutputTokens": self.max_output_tokens * len(image_data),
+            "maxOutputTokens": batch_tokens,
         }
         
         safety_settings = [
@@ -417,7 +424,7 @@ Respond with ONLY a JSON object in this exact format:
                 url,
                 headers=headers, 
                 json=payload,
-                timeout=180  # Increased timeout for batch requests
+                timeout=self.REQUEST_TIMEOUT
             )
             
             if response.status_code == 200:
