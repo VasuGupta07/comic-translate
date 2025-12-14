@@ -1,4 +1,5 @@
 from typing import Any
+import time
 import numpy as np
 import requests
 
@@ -7,13 +8,16 @@ from ...utils.translator_utils import MODEL_MAP
 
 
 class GeminiTranslation(BaseLLMTranslation):
-    """Translation engine using Google Gemini models via REST API."""
+    """Translation engine using Google Gemini models via REST API with retry logic."""
     
     def __init__(self):
         super().__init__()
         self.model_name = None
         self.api_key = None
         self.api_base_url = "https://generativelanguage.googleapis.com/v1beta/models"
+        # Retry configuration for rate limiting
+        self.max_retries = 5
+        self.base_delay = 1.0  # Base delay in seconds for exponential backoff
     
     def initialize(self, settings: Any, source_lang: str, target_lang: str, model_name: str, **kwargs) -> None:
         """
@@ -36,7 +40,7 @@ class GeminiTranslation(BaseLLMTranslation):
     
     def _perform_translation(self, user_prompt: str, system_prompt: str, image: np.ndarray) -> str:
         """
-        Perform translation using Gemini REST API.
+        Perform translation using Gemini REST API with retry logic for rate limiting.
         
         Args:
             user_prompt: The prompt to send to the model
@@ -95,27 +99,62 @@ class GeminiTranslation(BaseLLMTranslation):
         if system_prompt:
             payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
         
-        # Send request to Gemini API
+        # Send request with retry logic
         headers = {
             "Content-Type": "application/json"
         }
         
-        response = requests.post(
-            url, 
-            headers=headers, 
-            json=payload,
-            timeout=90
-        )
+        return self._make_request_with_retry(url, headers, payload)
+    
+    def _make_request_with_retry(self, url: str, headers: dict, payload: dict) -> str:
+        """
+        Make API request with exponential backoff retry for rate limiting.
         
-        # Handle response
-        if response.status_code != 200:
-            error_msg = f"API request failed with status code {response.status_code}: {response.text}"
-            raise Exception(error_msg)
+        Args:
+            url: API endpoint URL
+            headers: Request headers
+            payload: Request payload
+            
+        Returns:
+            Translated text from the model
+        """
+        for attempt in range(self.max_retries):
+            response = requests.post(
+                url, 
+                headers=headers, 
+                json=payload,
+                timeout=120
+            )
+            
+            if response.status_code == 200:
+                return self._parse_response(response.json())
+            elif response.status_code == 429:
+                # Rate limited - apply exponential backoff
+                delay = self.base_delay * (2 ** attempt)
+                print(f"Rate limited (429). Retrying in {delay:.1f}s (attempt {attempt + 1}/{self.max_retries})")
+                time.sleep(delay)
+            elif response.status_code >= 500:
+                # Server error - retry with backoff
+                delay = self.base_delay * (2 ** attempt)
+                print(f"Server error ({response.status_code}). Retrying in {delay:.1f}s (attempt {attempt + 1}/{self.max_retries})")
+                time.sleep(delay)
+            else:
+                # Other errors - don't retry
+                error_msg = f"API request failed with status code {response.status_code}: {response.text}"
+                raise Exception(error_msg)
         
-        # Extract text from response
-        response_data = response.json()
+        raise Exception(f"Max retries ({self.max_retries}) exceeded for Gemini API")
+    
+    def _parse_response(self, response_data: dict) -> str:
+        """
+        Parse API response and extract translated text.
         
-        # Extract the generated text from the response
+        Args:
+            response_data: Raw API response
+            
+        Returns:
+            Translated text
+        """
         candidates = response_data.get("candidates", [])
         if not candidates:
             return "No response generated"
