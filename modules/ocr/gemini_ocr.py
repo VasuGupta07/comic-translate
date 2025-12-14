@@ -17,14 +17,14 @@ class GeminiOCR(OCREngine):
         self.api_base_url = "https://generativelanguage.googleapis.com/v1beta/models"
         self.max_output_tokens = 5000
         
-    def initialize(self, settings: SettingsPage, model: str = 'Gemini-2.0-Flash', 
+    def initialize(self, settings: SettingsPage, model: str = 'Gemini-2.5-Pro', 
                    expansion_percentage: int = 5) -> None:
         """
         Initialize the Gemini OCR with API key and parameters.
         
         Args:
             settings: Settings page containing credentials
-            model: Gemini model to use for OCR (defaults to Gemini-2.0-Flash)
+            model: Gemini model to use for OCR (defaults to Gemini-2.5-Pro)
             expansion_percentage: Percentage to expand text bounding boxes
         """
         self.expansion_percentage = expansion_percentage
@@ -102,10 +102,19 @@ class GeminiOCR(OCREngine):
         }
         
         # Prepare payload
-        prompt = """
-        Extract the text in this image exactly as it appears. 
-        Only output the raw text with no additional comments or descriptions.
-        """
+        prompt = """You are an expert OCR system specialized in reading text from comics, manga, and graphic novels.
+Extract ALL text from this image exactly as it appears, including:
+- Speech bubble dialogue
+- Narrative boxes
+- Sound effects (onomatopoeia)
+- Signs, labels, or any visible text
+
+Rules:
+- Output ONLY the raw extracted text
+- Preserve line breaks as they appear
+- Do not add descriptions, explanations, or commentary
+- If text is stylized or artistic, transcribe it as accurately as possible
+- For vertical text (common in manga), read top-to-bottom, right-to-left"""
         payload = {
             "contents": [{
                 "parts": [
@@ -129,7 +138,7 @@ class GeminiOCR(OCREngine):
             url,
             headers=headers, 
             json=payload,
-            timeout=20
+            timeout=60
         )
         
         # Handle response
