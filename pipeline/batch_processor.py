@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor
 
 from modules.detection.processor import TextBlockDetector
 from modules.translation.processor import Translator
+from modules.ocr.gemini_unified import GeminiUnifiedProcessor
 from modules.utils.textblock import sort_blk_list
 from modules.utils.pipeline_utils import inpaint_map, get_config, generate_mask, get_language_code, is_directory_empty
 from modules.utils.translator_utils import get_raw_translation, get_raw_text, format_translations
@@ -44,6 +45,57 @@ class BatchProcessor:
         self.block_detection = block_detection_handler
         self.inpainting = inpainting_handler
         self.ocr_handler = ocr_handler
+        # Cache for unified Gemini processor
+        self._unified_processor_cache = None
+        self._unified_processor_key = None
+
+    def _should_use_unified_processor(self, ocr_model: str, translator_key: str) -> bool:
+        """
+        Check if unified Gemini processing should be used.
+        
+        Returns True when both OCR and Translator are Gemini models,
+        allowing us to combine OCR + Translation in a single API call.
+        
+        Args:
+            ocr_model: The selected OCR model name
+            translator_key: The selected translator key
+            
+        Returns:
+            True if unified processing should be used
+        """
+        gemini_ocr_models = {'Gemini-2.5-Pro', 'Gemini-2.0-Flash'}
+        gemini_translator_keys = {'Gemini-2.5-Pro', 'Gemini-2.5-Flash', 'Gemini-2.0-Flash'}
+        
+        return ocr_model in gemini_ocr_models and translator_key in gemini_translator_keys
+    
+    def _get_unified_processor(self, settings_page, ocr_model: str, 
+                               source_lang_en: str, target_lang_en: str) -> GeminiUnifiedProcessor:
+        """
+        Get or create a cached unified Gemini processor.
+        
+        Args:
+            settings_page: Settings page with credentials
+            ocr_model: OCR model name (used for the unified processor)
+            source_lang_en: Source language in English
+            target_lang_en: Target language in English
+            
+        Returns:
+            Initialized GeminiUnifiedProcessor instance
+        """
+        cache_key = f"{ocr_model}_{source_lang_en}_{target_lang_en}"
+        
+        if self._unified_processor_cache is None or self._unified_processor_key != cache_key:
+            processor = GeminiUnifiedProcessor()
+            processor.initialize(
+                settings_page, 
+                model=ocr_model,
+                source_lang=source_lang_en,
+                target_lang=target_lang_en
+            )
+            self._unified_processor_cache = processor
+            self._unified_processor_key = cache_key
+            
+        return self._unified_processor_cache
 
     def skip_save(self, directory, timestamp, base_name, extension, archive_bname, image):
         path = os.path.join(directory, f"comic_translate_{timestamp}", "translated_images", archive_bname)
@@ -140,15 +192,31 @@ class BatchProcessor:
             if blk_list:
                 # Get ocr cache key for batch processing
                 ocr_model = settings_page.get_tool_selection('ocr')
+                translator_key = settings_page.get_tool_selection('translator')
                 device = resolve_device(settings_page.is_gpu_enabled())
                 cache_key = self.cache_manager._get_ocr_cache_key(image, source_lang, ocr_model, device)
-                # Use the shared OCR processor from the handler
-                self.ocr_handler.ocr.initialize(self.main_page, source_lang)
+                source_lang_english = self.main_page.lang_mapping.get(source_lang, source_lang)
+                
+                # Check if we can use unified Gemini processing (OCR + Translation in one call)
+                use_unified = self._should_use_unified_processor(ocr_model, translator_key)
+                unified_processing_done = False
+                
                 try:
-                    self.ocr_handler.ocr.process(image, blk_list)
+                    if use_unified:
+                        # Use unified Gemini processor for OCR + Translation in single API call
+                        logger.info(f"Using unified Gemini processor for OCR + Translation")
+                        unified_processor = self._get_unified_processor(
+                            settings_page, ocr_model, source_lang_english, target_lang_en
+                        )
+                        unified_processor.process_image(image, blk_list)
+                        unified_processing_done = True
+                    else:
+                        # Use the shared OCR processor from the handler
+                        self.ocr_handler.ocr.initialize(self.main_page, source_lang)
+                        self.ocr_handler.ocr.process(image, blk_list)
+                    
                     # Cache the OCR results for potential future use
                     self.cache_manager._cache_ocr_results(cache_key, self.main_page.blk_list)
-                    source_lang_english = self.main_page.lang_mapping.get(source_lang, source_lang)
                     rtl = True if source_lang_english == 'Japanese' else False
                     blk_list = sort_blk_list(blk_list, rtl)
                     
@@ -234,36 +302,40 @@ class BatchProcessor:
 
             # Get Translations/ Export if selected
             extra_context = settings_page.get_llm_settings()['extra_context']
-            translator_key = settings_page.get_tool_selection('translator')
-            translator = Translator(self.main_page, source_lang, target_lang)
             
-            # Get translation cache key for batch processing
-            translation_cache_key = self.cache_manager._get_translation_cache_key(
-                image, source_lang, target_lang, translator_key, extra_context
-            )
-            
-            try:
-                translator.translate(blk_list, image, extra_context)
-                # Cache the translation results for potential future use
-                self.cache_manager._cache_translation_results(translation_cache_key, blk_list)
-            except Exception as e:
-                # if it's an HTTPError, try to pull the "error_description" field
-                if isinstance(e, requests.exceptions.HTTPError):
-                    try:
-                        err_json = e.response.json()
-                        err_msg = err_json.get("error_description", str(e))
-                    except Exception:
+            # Skip translation if unified processing was already done
+            if not unified_processing_done:
+                translator = Translator(self.main_page, source_lang, target_lang)
+                
+                # Get translation cache key for batch processing
+                translation_cache_key = self.cache_manager._get_translation_cache_key(
+                    image, source_lang, target_lang, translator_key, extra_context
+                )
+                
+                try:
+                    translator.translate(blk_list, image, extra_context)
+                    # Cache the translation results for potential future use
+                    self.cache_manager._cache_translation_results(translation_cache_key, blk_list)
+                except Exception as e:
+                    # if it's an HTTPError, try to pull the "error_description" field
+                    if isinstance(e, requests.exceptions.HTTPError):
+                        try:
+                            err_json = e.response.json()
+                            err_msg = err_json.get("error_description", str(e))
+                        except Exception:
+                            err_msg = str(e)
+                    else:
                         err_msg = str(e)
-                else:
-                    err_msg = str(e)
 
-                logger.exception(f"Translation failed: {err_msg}")
-                reason = f"Translator: {err_msg}"
-                full_traceback = traceback.format_exc()
-                self.skip_save(directory, timestamp, base_name, extension, archive_bname, image)
-                self.main_page.image_skipped.emit(image_path, "Translator", err_msg)
-                self.log_skipped_image(directory, timestamp, image_path, reason, full_traceback)
-                continue
+                    logger.exception(f"Translation failed: {err_msg}")
+                    reason = f"Translator: {err_msg}"
+                    full_traceback = traceback.format_exc()
+                    self.skip_save(directory, timestamp, base_name, extension, archive_bname, image)
+                    self.main_page.image_skipped.emit(image_path, "Translator", err_msg)
+                    self.log_skipped_image(directory, timestamp, image_path, reason, full_traceback)
+                    continue
+            else:
+                logger.info("Skipping separate translation - already done via unified Gemini processor")
 
             entire_raw_text = get_raw_text(blk_list)
             entire_translated_text = get_raw_translation(blk_list)
