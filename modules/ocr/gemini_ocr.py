@@ -151,6 +151,7 @@ Rules:
 - Preserve the original text exactly as written
 - For vertical text (common in manga), read top-to-bottom, right-to-left
 - If a region has no readable text, use an empty string ""
+- Do NOT translate the text
 - Do not add descriptions, explanations, or commentary
 
 Respond with ONLY a JSON object in this exact format:
