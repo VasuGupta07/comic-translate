@@ -29,14 +29,14 @@ class GeminiOCR(OCREngine):
         self.base_delay = 15.0  # Base delay in seconds for exponential backoff
         self.max_delay = 120.0  # Maximum delay between retries
         
-    def initialize(self, settings: SettingsPage, model: str = 'Gemini-2.5-Pro', 
+    def initialize(self, settings: SettingsPage, model: str = 'Gemini-2.5-Flash', 
                    expansion_percentage: int = 5) -> None:
         """
         Initialize the Gemini OCR with API key and parameters.
         
         Args:
             settings: Settings page containing credentials
-            model: Gemini model to use for OCR (defaults to Gemini-2.5-Pro)
+            model: Gemini model to use for OCR (defaults to Gemini-2.5-Flash)
             expansion_percentage: Percentage to expand text bounding boxes
         """
         self.expansion_percentage = expansion_percentage

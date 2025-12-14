@@ -43,7 +43,7 @@ class GeminiUnifiedProcessor(OCREngine):
         self.base_delay = 15.0  # Base delay in seconds for exponential backoff
         self.max_delay = 120.0  # Maximum delay between retries
         
-    def initialize(self, settings: SettingsPage, model: str = 'Gemini-2.5-Pro', 
+    def initialize(self, settings: SettingsPage, model: str = 'Gemini-2.5-Flash', 
                    expansion_percentage: int = 5,
                    source_lang: str = 'Japanese',
                    target_lang: str = 'English') -> None:
@@ -52,7 +52,7 @@ class GeminiUnifiedProcessor(OCREngine):
         
         Args:
             settings: Settings page containing credentials
-            model: Gemini model to use (defaults to Gemini-2.5-Pro)
+            model: Gemini model to use (defaults to Gemini-2.5-Flash)
             expansion_percentage: Percentage to expand text bounding boxes
             source_lang: Source language for OCR/translation
             target_lang: Target language for translation
@@ -60,7 +60,7 @@ class GeminiUnifiedProcessor(OCREngine):
         self.expansion_percentage = expansion_percentage
         credentials = settings.get_credentials(settings.ui.tr('Google Gemini'))
         self.api_key = credentials.get('api_key', '')
-        self.model = MODEL_MAP.get(model, 'gemini-2.5-pro')  # Default to gemini-2.5-pro if not found
+        self.model = MODEL_MAP.get(model, 'gemini-2.5-flash')  # Default to gemini-2.5-flash if not found
         self.source_lang = source_lang
         self.target_lang = target_lang
         

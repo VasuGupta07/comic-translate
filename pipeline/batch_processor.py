@@ -63,8 +63,8 @@ class BatchProcessor:
         Returns:
             True if unified processing should be used
         """
-        gemini_ocr_models = {'Gemini-2.5-Pro', 'Gemini-2.0-Flash'}
-        gemini_translator_keys = {'Gemini-2.5-Pro', 'Gemini-2.5-Flash', 'Gemini-2.0-Flash'}
+        gemini_ocr_models = {'Gemini-2.5-Flash', 'Gemini-2.5-Pro', 'Gemini-2.0-Flash'}
+        gemini_translator_keys = {'Gemini-2.5-Flash', 'Gemini-2.5-Pro', 'Gemini-2.0-Flash'}
         
         return ocr_model in gemini_ocr_models and translator_key in gemini_translator_keys
     
