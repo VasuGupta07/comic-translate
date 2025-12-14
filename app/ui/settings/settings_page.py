@@ -18,7 +18,6 @@ TRANSLATOR_MIGRATIONS = {
     "GPT-4o mini":         "GPT-4.1-mini",
     "Gemini-2.0-Flash":    "Gemini-2.5-Flash",
     "Gemini-2.0-Pro":      "Gemini-2.5-Flash",
-    "Gemini-2.5-Pro":      "Gemini-2.5-Flash",
     "Claude-3-Opus":       "Claude-4.5-Sonnet",
     "Claude-4-Sonnet":     "Claude-4.5-Sonnet",
     "Claude-3-Haiku":    "Claude-4.5-Haiku",
@@ -262,7 +261,7 @@ class SettingsPage(QtWidgets.QWidget):
 
         # Load tools settings
         settings.beginGroup('tools')
-        raw_translator = settings.value('translator', 'GPT-4.1')
+        raw_translator = settings.value('translator', 'Gemini-2.5-Pro')
         translator = TRANSLATOR_MIGRATIONS.get(raw_translator, raw_translator)
         translated_translator = self.ui.reverse_mappings.get(translator, translator)
         self.ui.translator_combo.setCurrentText(translated_translator)

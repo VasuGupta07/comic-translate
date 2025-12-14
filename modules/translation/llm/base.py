@@ -55,7 +55,18 @@ class BaseLLMTranslation(LLMTranslation):
         """
         entire_raw_text = get_raw_text(blk_list)
         system_prompt = self.get_system_prompt(self.source_lang, self.target_lang)
-        user_prompt = f"{extra_context}\nMake the translation sound as natural as possible.\nTranslate this:\n{entire_raw_text}"
+        user_prompt = f"""{extra_context}
+
+You are translating comic/manga dialogue. Important guidelines:
+- Make translations sound natural and conversational in the target language
+- Preserve the tone, emotion, and personality of characters
+- Adapt cultural references appropriately for the target audience
+- Keep translations concise to fit in speech bubbles
+- Translate sound effects/onomatopoeia appropriately for the target language
+- Maintain any humor, wordplay, or dramatic effect
+
+Translate this from {self.source_lang} to {self.target_lang}:
+{entire_raw_text}"""
         
         entire_translated_text = self._perform_translation(user_prompt, system_prompt, image)
         set_texts_from_json(blk_list, entire_translated_text)

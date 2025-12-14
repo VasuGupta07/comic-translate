@@ -54,9 +54,6 @@ class GeminiTranslation(BaseLLMTranslation):
             "temperature": self.temperature,
             "maxOutputTokens": self.max_tokens,
             "topP": self.top_p,
-            "thinkingConfig": {
-                "thinkingBudget": 0
-            },
         }
         
         # Setup safety settings
@@ -107,7 +104,7 @@ class GeminiTranslation(BaseLLMTranslation):
             url, 
             headers=headers, 
             json=payload,
-            timeout=30
+            timeout=90
         )
         
         # Handle response
