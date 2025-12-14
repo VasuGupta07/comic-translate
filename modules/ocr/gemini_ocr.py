@@ -1,3 +1,6 @@
+import json
+import re
+import time
 import numpy as np
 import requests
 
@@ -8,14 +11,22 @@ from app.ui.settings.settings_page import SettingsPage
 
 
 class GeminiOCR(OCREngine):
-    """OCR engine using Google Gemini models via REST API with block processing method."""
+    """OCR engine using Google Gemini models via REST API with batch processing.
+    
+    This implementation sends the full image with bounding box coordinates in a single
+    API call, extracting text for all blocks at once. This significantly reduces API calls
+    and avoids rate limiting issues (Error 429).
+    """
     
     def __init__(self):
         self.api_key = None
         self.expansion_percentage = 5
         self.model = ''
         self.api_base_url = "https://generativelanguage.googleapis.com/v1beta/models"
-        self.max_output_tokens = 5000
+        self.max_output_tokens = 8000
+        # Retry configuration for rate limiting
+        self.max_retries = 5
+        self.base_delay = 1.0  # Base delay in seconds for exponential backoff
         
     def initialize(self, settings: SettingsPage, model: str = 'Gemini-2.5-Pro', 
                    expansion_percentage: int = 5) -> None:
@@ -34,7 +45,10 @@ class GeminiOCR(OCREngine):
         
     def process_image(self, img: np.ndarray, blk_list: list[TextBlock]) -> list[TextBlock]:
         """
-        Process an image with Gemini-based OCR using block processing approach.
+        Process an image with Gemini-based OCR using batch processing.
+        
+        Sends the full image with all bounding box coordinates in a single API call,
+        which dramatically reduces API calls (from N calls to 1 call per page).
         
         Args:
             img: Input image as numpy array
@@ -43,12 +57,14 @@ class GeminiOCR(OCREngine):
         Returns:
             List of updated TextBlock objects with recognized text
         """
-        return self._process_by_blocks(img, blk_list)
+        if not blk_list:
+            return blk_list
+            
+        return self._process_batch(img, blk_list)
     
-    def _process_by_blocks(self, img: np.ndarray, blk_list: list[TextBlock]) -> list[TextBlock]:
+    def _process_batch(self, img: np.ndarray, blk_list: list[TextBlock]) -> list[TextBlock]:
         """
-        Process an image by processing individual text regions separately.
-        Similar to GPTOCR approach, each text block is cropped and sent individually.
+        Process all text blocks in a single API call using batch OCR.
         
         Args:
             img: Input image as numpy array
@@ -57,8 +73,9 @@ class GeminiOCR(OCREngine):
         Returns:
             List of updated TextBlock objects with recognized text
         """
-        for blk in blk_list:
-            # Get box coordinates
+        # Build bounding box info for all blocks
+        block_coords = []
+        for idx, blk in enumerate(blk_list):
             if blk.bubble_xyxy is not None:
                 x1, y1, x2, y2 = blk.bubble_xyxy
             else:
@@ -69,26 +86,43 @@ class GeminiOCR(OCREngine):
                     img
                 )
             
-            # Check if coordinates are valid
+            # Only include valid coordinates
             if x1 < x2 and y1 < y2 and x1 >= 0 and y1 >= 0 and x2 <= img.shape[1] and y2 <= img.shape[0]:
-                # Crop image and encode
-                cropped_img = img[y1:y2, x1:x2]
-                encoded_img = self.encode_image(cropped_img)
-                
-                # Get OCR result from Gemini
-                blk.text = self._get_gemini_block_ocr(encoded_img)
+                block_coords.append({
+                    "block_id": idx,
+                    "coords": [int(x1), int(y1), int(x2), int(y2)]
+                })
+        
+        if not block_coords:
+            return blk_list
+        
+        # Encode full image
+        encoded_img = self.encode_image(img)
+        
+        # Get batch OCR results
+        results = self._get_batch_ocr(encoded_img, block_coords)
+        
+        # Assign results to blocks
+        for block_id, text in results.items():
+            try:
+                idx = int(block_id.replace("block_", ""))
+                if 0 <= idx < len(blk_list):
+                    blk_list[idx].text = text
+            except (ValueError, IndexError):
+                continue
                 
         return blk_list
     
-    def _get_gemini_block_ocr(self, base64_image: str) -> str:
+    def _get_batch_ocr(self, base64_image: str, block_coords: list) -> dict:
         """
-        Get OCR result for a single block from Gemini model.
+        Get OCR results for all blocks in a single API call.
         
         Args:
-            base64_image: Base64 encoded image
+            base64_image: Base64 encoded full image
+            block_coords: List of dicts with block_id and coords
             
         Returns:
-            OCR result text
+            Dictionary mapping block_id to extracted text
         """
         if not self.api_key:
             raise ValueError("API key not initialized. Call initialize() first.")
@@ -96,25 +130,41 @@ class GeminiOCR(OCREngine):
         # Create API endpoint URL
         url = f"{self.api_base_url}/{self.model}:generateContent?key={self.api_key}"
         
+        # Build coordinates description for prompt
+        coords_json = json.dumps(block_coords, indent=2)
+        
+        prompt = f"""You are an expert OCR system specialized in reading text from comics, manga, and graphic novels.
+
+I have identified {len(block_coords)} text regions in this image. Each region has a block_id and coordinates [x1, y1, x2, y2] (top-left to bottom-right).
+
+Text regions:
+{coords_json}
+
+For EACH text region, extract ALL text exactly as it appears, including:
+- Speech bubble dialogue
+- Narrative boxes  
+- Sound effects (onomatopoeia)
+- Signs, labels, or any visible text
+
+Rules:
+- Output ONLY valid JSON with the extracted text for each block
+- Preserve the original text exactly as written
+- For vertical text (common in manga), read top-to-bottom, right-to-left
+- If a region has no readable text, use an empty string ""
+- Do not add descriptions, explanations, or commentary
+
+Respond with ONLY a JSON object in this exact format:
+{{
+  "block_0": "text from first region",
+  "block_1": "text from second region",
+  ...
+}}"""
+
         # Setup generation config
         generation_config = {
             "maxOutputTokens": self.max_output_tokens,
         }
         
-        # Prepare payload
-        prompt = """You are an expert OCR system specialized in reading text from comics, manga, and graphic novels.
-Extract ALL text from this image exactly as it appears, including:
-- Speech bubble dialogue
-- Narrative boxes
-- Sound effects (onomatopoeia)
-- Signs, labels, or any visible text
-
-Rules:
-- Output ONLY the raw extracted text
-- Preserve line breaks as they appear
-- Do not add descriptions, explanations, or commentary
-- If text is stylized or artistic, transcribe it as accurately as possible
-- For vertical text (common in manga), read top-to-bottom, right-to-left"""
         # Setup safety settings to disable all content filtering
         safety_settings = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -128,7 +178,7 @@ Rules:
                 "parts": [
                     {
                         "inline_data": {
-                            "mime_type": "image/jpg",
+                            "mime_type": "image/jpeg",
                             "data": base64_image
                         }
                     },
@@ -141,35 +191,80 @@ Rules:
             "safetySettings": safety_settings,
         }
         
-        # Make POST request to Gemini API
-        headers = {"Content-Type": "application/json"}
-        response = requests.post(
-            url,
-            headers=headers, 
-            json=payload,
-            timeout=60
-        )
+        # Make request with retry logic for rate limiting
+        return self._make_request_with_retry(url, payload)
+    
+    def _make_request_with_retry(self, url: str, payload: dict) -> dict:
+        """
+        Make API request with exponential backoff retry for rate limiting.
         
-        # Handle response
-        if response.status_code == 200:
-            response_data = response.json()
+        Args:
+            url: API endpoint URL
+            payload: Request payload
             
-            # Extract generated text
-            candidates = response_data.get("candidates", [])
-            if not candidates:
-                return ""
-                
-            content = candidates[0].get("content", {})
-            parts = content.get("parts", [])
+        Returns:
+            Dictionary of OCR results
+        """
+        headers = {"Content-Type": "application/json"}
+        
+        for attempt in range(self.max_retries):
+            response = requests.post(
+                url,
+                headers=headers, 
+                json=payload,
+                timeout=120
+            )
             
-            # Concatenate all text parts
-            result = ""
-            for part in parts:
-                if "text" in part:
-                    result += part["text"]
+            if response.status_code == 200:
+                return self._parse_response(response.json())
+            elif response.status_code == 429:
+                # Rate limited - apply exponential backoff
+                delay = self.base_delay * (2 ** attempt)
+                print(f"Rate limited (429). Retrying in {delay:.1f}s (attempt {attempt + 1}/{self.max_retries})")
+                time.sleep(delay)
+            elif response.status_code >= 500:
+                # Server error - retry with backoff
+                delay = self.base_delay * (2 ** attempt)
+                print(f"Server error ({response.status_code}). Retrying in {delay:.1f}s (attempt {attempt + 1}/{self.max_retries})")
+                time.sleep(delay)
+            else:
+                # Other errors - don't retry
+                print(f"API error: {response.status_code} {response.text}")
+                return {}
+        
+        print(f"Max retries ({self.max_retries}) exceeded")
+        return {}
+    
+    def _parse_response(self, response_data: dict) -> dict:
+        """
+        Parse API response and extract OCR results.
+        
+        Args:
+            response_data: Raw API response
             
-            # Remove any leading/trailing whitespace
-            return result.strip()
-        else:
-            print(f"API error: {response.status_code} {response.text}")
-            return ""
+        Returns:
+            Dictionary mapping block_id to text
+        """
+        candidates = response_data.get("candidates", [])
+        if not candidates:
+            return {}
+            
+        content = candidates[0].get("content", {})
+        parts = content.get("parts", [])
+        
+        # Concatenate all text parts
+        result_text = ""
+        for part in parts:
+            if "text" in part:
+                result_text += part["text"]
+        
+        # Extract JSON from response
+        try:
+            # Try to find JSON in the response
+            json_match = re.search(r'\{[\s\S]*\}', result_text)
+            if json_match:
+                return json.loads(json_match.group(0))
+        except json.JSONDecodeError:
+            print(f"Failed to parse JSON from response: {result_text[:200]}")
+        
+        return {}
