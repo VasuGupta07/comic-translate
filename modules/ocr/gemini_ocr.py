@@ -115,6 +115,14 @@ Rules:
 - Do not add descriptions, explanations, or commentary
 - If text is stylized or artistic, transcribe it as accurately as possible
 - For vertical text (common in manga), read top-to-bottom, right-to-left"""
+        # Setup safety settings to disable all content filtering
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+        
         payload = {
             "contents": [{
                 "parts": [
@@ -130,6 +138,7 @@ Rules:
                 ]
             }],
             "generationConfig": generation_config,
+            "safetySettings": safety_settings,
         }
         
         # Make POST request to Gemini API
